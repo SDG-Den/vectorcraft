@@ -32,7 +32,8 @@ pub(crate) fn read_prefs() -> Option<vectorcraft_ui_egui::UiState> {
     if let Some(p) = prefs_path()
         && let Ok(bytes) = std::fs::read(&p)
     {
-        let read = vectorcraft_ui_egui::UiState::read_preferences(&bytes);
+        let merged = with_settings_overlay(&bytes, p.parent().unwrap_or(std::path::Path::new(".")));
+        let read = vectorcraft_ui_egui::UiState::read_preferences(&merged);
         if read.as_ref().is_none_or(|read| !read.intact) {
             keep_prefs_copy(&p, &bytes, "ui.unreadable");
         }
@@ -41,8 +42,23 @@ pub(crate) fn read_prefs() -> Option<vectorcraft_ui_egui::UiState> {
         }
         return read.map(|read| read.ui);
     }
-    let bytes = legacy_prefs_path().and_then(|p| std::fs::read(p).ok())?;
-    decode_saved_prefs(&bytes)
+    if let Some(p) = legacy_prefs_path()
+        && let Ok(bytes) = std::fs::read(&p)
+    {
+        let merged = with_settings_overlay(&bytes, p.parent().unwrap_or(std::path::Path::new(".")));
+        return decode_saved_prefs(&merged);
+    }
+    None
+}
+
+/// `settings.override.json` (or `CRAFT_SETTINGS_FILE`) merged over the saved `ui.json`, as JSON.
+/// A file that is not JSON at all is left for [`read_preferences`] to reject, so the caller keeps
+/// its copy of it unchanged.
+fn with_settings_overlay(bytes: &[u8], config_dir: &std::path::Path) -> Vec<u8> {
+    let Ok(mut saved) = serde_json::from_slice::<serde_json::Value>(bytes) else { return bytes.to_vec() };
+    let Some(overlay) = craft_settings::overlay::load_overlay(config_dir) else { return bytes.to_vec() };
+    craft_settings::overlay::merge(&mut saved, overlay);
+    serde_json::to_vec(&saved).unwrap_or_else(|_| bytes.to_vec())
 }
 
 /// Saved preferences, with what this version cannot read of their docking data dropped and
@@ -321,6 +337,20 @@ mod tests {
     use serde_json::json;
 
     use super::{merge_changes, same_lasting};
+
+    #[test]
+    fn settings_overlay_is_merged_over_the_saved_preferences() {
+        let dir = std::env::temp_dir().join(format!("vectorcraft-settings-overlay-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.override.json"), br#"{"engine_prefs":{"uiAccent":"violet"}}"#).unwrap();
+        let saved = br#"{"workspace":"Essentials","engine_prefs":{"uiAccent":"blue","uiScaling":1.0}}"#;
+        let merged = super::with_settings_overlay(saved, &dir);
+        let ui = super::decode_saved_prefs(&merged).unwrap();
+        assert_eq!(ui.workspace, "Essentials");
+        assert_eq!(ui.engine_prefs["uiAccent"], "violet");
+        assert_eq!(ui.engine_prefs["uiScaling"], 1.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Two windows open at once (#4625): the one that saves last keeps the other's changes and
     /// adds its own, instead of putting back the preferences it started from.
