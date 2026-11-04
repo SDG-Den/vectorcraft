@@ -30,6 +30,23 @@ mod view;
 
 pub use fonts::MAX_RECENT_FONTS;
 
+/// The shared suite palette at startup, or `None` for the built-in theme. Native only: web builds
+/// keep the built-in theme.
+#[cfg(not(target_arch = "wasm32"))]
+fn initial_palette() -> Option<craft_ui::theme::Palette> {
+    craft_ui::theme::Palette::load().map(|loaded| loaded.palette)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initial_palette() -> Option<craft_ui::theme::Palette> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn palette_watcher() -> craft_ui::theme::PaletteWatcher {
+    craft_ui::theme::PaletteWatcher::from_env()
+}
+
 impl VectorcraftApp {
     /// Takes the host's Caps Lock state, which gives the drawing tools the crosshair while it is on
     /// without changing the saved Use Precise Cursors preference.
@@ -107,6 +124,10 @@ impl VectorcraftApp {
             synthetic: vec![],
             styled: false,
             fonts_ready: false,
+            palette: initial_palette(),
+            palette_stamp: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            palette_watcher: palette_watcher(),
             context: 0,
             ui_ctx: None,
             ui_fonts: Default::default(),

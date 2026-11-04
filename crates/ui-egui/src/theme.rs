@@ -5,6 +5,8 @@ use std::sync::Arc;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use serde::{Deserialize, Serialize};
 
+use craft_ui::theme::Palette;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Brightness {
     Dark,
@@ -450,12 +452,94 @@ impl Tokens {
         }
     }
 
+    /// The built-in look with a shared suite palette's core chrome over it.
+    ///
+    /// The palette decides the family: a light palette never keeps the dark stock visuals, and the
+    /// reverse. The brightness within that family is kept when it matches, otherwise the family's
+    /// default kind is the base for metrics, document colours and artboard marks.
+    pub fn for_palette(b: Brightness, accent: Accent, scheme: Scheme, palette: &Palette) -> Self {
+        let base = match (palette.is_dark(), b) {
+            (true, Brightness::Dark | Brightness::MediumDark) => b,
+            (true, _) => Brightness::Dark,
+            (false, Brightness::MediumLight | Brightness::Light) => b,
+            (false, _) => Brightness::Light,
+        };
+        let mut t = Self::for_scheme(scheme, base, accent);
+        let a = palette.accent();
+        let panel = palette.surface();
+        let strong = readable_on(a, Color32::WHITE);
+        t.dark = palette.is_dark();
+        t.app_bar = palette.background();
+        t.panel = panel;
+        t.panel_darker = toward(palette.background(), panel, 0.5);
+        t.input = palette.background();
+        t.input_border = palette.outline();
+        t.border = palette.outline();
+        t.divider = toward(palette.outline(), panel, 0.35);
+        t.text = palette.text();
+        t.text_dim = palette.text_muted();
+        t.text_disabled = toward(palette.text_muted(), palette.background(), 0.45);
+        t.icon = palette.text();
+        t.hover = palette.surface_alt();
+        t.tool_active = toward(panel, a, if t.dark { 0.3 } else { 0.24 });
+        t.accent = a;
+        t.accent_strong = strong;
+        t.row_selected = toward(panel, a, if t.dark { 0.24 } else { 0.2 });
+        t.ruler = t.panel_darker;
+        t.ruler_tick = toward(palette.text_muted(), panel, 0.2);
+        t.smart_guide = palette.base[14];
+        t.guide = palette.base[12];
+        t.measure_bg = Color32::from_rgba_unmultiplied(panel.r(), panel.g(), panel.b(), 235);
+        t.button = palette.surface_alt();
+        t.text_strong = if t.dark { Color32::WHITE } else { Color32::BLACK };
+        t.tab_strip = toward(palette.background(), panel, 0.4);
+        t.button_border = toward(palette.outline(), palette.text_muted(), 0.5);
+        t.selection = a;
+        t.error = palette.danger();
+        t.warning = palette.warning();
+        t.flyout_active = if t.dark { a } else { strong };
+        t.anchor_selected = a;
+        t
+    }
+
     pub fn get(ctx: &egui::Context) -> Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::NULL)).unwrap_or_else(|| Tokens::for_brightness(Brightness::default()))
     }
     pub fn cr(&self) -> CornerRadius {
         CornerRadius::same(self.radius)
     }
+}
+
+/// `a` mixed `k` of the way to `b`.
+fn toward(a: Color32, b: Color32, k: f32) -> Color32 {
+    let mix = |p: u8, q: u8| (f32::from(p) + (f32::from(q) - f32::from(p)) * k).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// `fill` darkened until `ink` reads on it at WCAG AA's 4.5:1 for body text.
+fn readable_on(fill: Color32, ink: Color32) -> Color32 {
+    let mut color = fill;
+    for _ in 0..32 {
+        if contrast(color, ink) >= 4.5 {
+            break;
+        }
+        color = toward(color, Color32::BLACK, 0.08);
+    }
+    color
+}
+
+/// The contrast ratio of two opaque colors, from 1 (the same) to 21 (black on white), as WCAG 2
+/// defines it.
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let luminance = |c: Color32| {
+        let channel = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+    };
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
 /// The toolbar, the panel dock and the icon rail are cards: `body` drawn on the panel colour with
@@ -585,7 +669,21 @@ pub fn apply(ctx: &egui::Context, b: Brightness) {
 
 /// [`apply`] with an accent colour and colour scheme.
 pub fn apply_with(ctx: &egui::Context, b: Brightness, accent: Accent, scheme: Scheme) {
-    let t = Tokens::for_scheme(scheme, b, accent);
+    apply_with_palette(ctx, b, accent, scheme, None);
+}
+
+/// [`apply_with`], choosing the family and core chrome from the shared suite palette when one is
+/// loaded.
+pub fn apply_with_palette(ctx: &egui::Context, b: Brightness, accent: Accent, scheme: Scheme, palette: Option<&Palette>) {
+    let t = match palette {
+        Some(palette) => Tokens::for_palette(b, accent, scheme, palette),
+        None => Tokens::for_scheme(scheme, b, accent),
+    };
+    apply_tokens(ctx, t);
+}
+
+/// Push `t` into egui's global style and the context's [`Tokens`].
+fn apply_tokens(ctx: &egui::Context, t: Tokens) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
     // egui keeps a style for each system theme and by default follows the system's setting. The
     // chosen brightness sets egui's theme, so these colors stay in force when the system's setting
@@ -735,20 +833,6 @@ mod tests {
         }
     }
 
-    /// The contrast ratio of two opaque colors, from 1 (the same) to 21 (black on white), as WCAG 2
-    /// defines it.
-    fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
-        let luminance = |c: egui::Color32| {
-            let channel = |v: u8| {
-                let v = f32::from(v) / 255.0;
-                if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
-            };
-            0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
-        };
-        let (a, b) = (luminance(a), luminance(b));
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
-
     /// Changing brightness keeps the interface settings made after the theme was applied, such as
     /// General › Show Tool Tips' delay.
     #[test]
@@ -759,5 +843,102 @@ mod tests {
         apply(&ctx, Brightness::Light);
         assert_eq!(ctx.global_style().interaction.tooltip_delay, f32::INFINITY);
         assert_eq!(ctx.global_style().visuals.window_fill, Tokens::for_brightness(Brightness::Light).panel);
+    }
+
+    fn rgb(r: u8, g: u8, b: u8) -> Color32 {
+        Color32::from_rgb(r, g, b)
+    }
+
+    fn test_palette(dark: bool) -> Palette {
+        let mut p = if dark { Palette::dark() } else { Palette::light() };
+        p.name = "test".into();
+        p.base[0] = if dark { rgb(0x10, 0x11, 0x14) } else { rgb(0xfa, 0xfa, 0xf7) };
+        p.base[1] = if dark { rgb(0x1c, 0x1e, 0x24) } else { rgb(0xef, 0xf0, 0xf2) };
+        p.base[2] = if dark { rgb(0x2a, 0x2d, 0x35) } else { rgb(0xe0, 0xe2, 0xe6) };
+        p.base[3] = if dark { rgb(0x44, 0x48, 0x52) } else { rgb(0xbd, 0xc1, 0xc8) };
+        p.base[4] = if dark { rgb(0x9a, 0xa1, 0xad) } else { rgb(0x55, 0x5c, 0x68) };
+        p.base[5] = if dark { rgb(0xe4, 0xe6, 0xea) } else { rgb(0x1b, 0x1d, 0x22) };
+        p.base[8] = rgb(0xd8, 0x40, 0x48);
+        p.base[9] = rgb(0xe0, 0x9a, 0x20);
+        p.base[12] = rgb(0x30, 0xc0, 0xc8);
+        p.base[13] = rgb(0x33, 0x88, 0xdd);
+        p.base[14] = rgb(0xc0, 0x50, 0xc8);
+        p.accent = Some(rgb(0x33, 0x88, 0xdd));
+        p
+    }
+
+    #[test]
+    fn a_dark_palette_maps_the_core_chrome() {
+        let p = test_palette(true);
+        let t = Tokens::for_palette(Brightness::MediumDark, Accent::Pink, Scheme::Modern, &p);
+        assert!(t.dark);
+        assert_eq!(
+            (t.app_bar, t.panel, t.input, t.tab_strip),
+            (p.background(), p.surface(), p.background(), toward(p.background(), p.surface(), 0.4))
+        );
+        assert_eq!((t.text, t.text_dim, t.icon), (p.text(), p.text_muted(), p.text()));
+        assert_eq!((t.text_strong, t.accent, t.selection), (Color32::WHITE, p.accent(), p.accent()));
+        assert_eq!((t.input_border, t.border, t.button_border), (p.outline(), p.outline(), toward(p.outline(), p.text_muted(), 0.5)));
+        assert_eq!((t.ruler, t.ruler_tick), (t.panel_darker, toward(p.text_muted(), p.surface(), 0.2)));
+        assert_eq!((t.smart_guide, t.guide), (p.base[14], p.base[12]));
+        assert_eq!((t.error, t.warning), (p.danger(), p.warning()));
+        assert_eq!(t.tool_active, toward(p.surface(), p.accent(), 0.3));
+        assert_eq!(t.row_selected, toward(p.surface(), p.accent(), 0.24));
+        assert_eq!(t.button, p.surface_alt());
+        assert_eq!(t.measure_bg, Color32::from_rgba_unmultiplied(p.surface().r(), p.surface().g(), p.surface().b(), 235));
+        assert_eq!(t.radius, Tokens::for_brightness(Brightness::MediumDark).radius);
+    }
+
+    #[test]
+    fn a_light_palette_maps_the_core_chrome() {
+        let p = test_palette(false);
+        let t = Tokens::for_palette(Brightness::MediumLight, Accent::Green, Scheme::Classic, &p);
+        assert!(!t.dark);
+        assert_eq!((t.app_bar, t.panel), (p.background(), p.surface()));
+        assert_eq!((t.text, t.text_dim), (p.text(), p.text_muted()));
+        assert_eq!((t.text_strong, t.accent), (Color32::BLACK, p.accent()));
+        assert_eq!((t.input, t.tab_strip), (p.background(), toward(p.background(), p.surface(), 0.4)));
+        assert_eq!((t.error, t.warning), (p.danger(), p.warning()));
+        assert_eq!(t.tool_active, toward(p.surface(), p.accent(), 0.24));
+        assert_eq!(t.row_selected, toward(p.surface(), p.accent(), 0.2));
+    }
+
+    #[test]
+    fn the_palette_decides_the_family_not_the_saved_brightness() {
+        let dark = test_palette(true);
+        let light = test_palette(false);
+        let from_light = Tokens::for_palette(Brightness::Light, Accent::Coral, Scheme::Modern, &dark);
+        let from_dark = Tokens::for_palette(Brightness::Dark, Accent::Coral, Scheme::Modern, &light);
+        assert!(from_light.dark);
+        assert!(!from_dark.dark);
+        assert_eq!(from_light.app_bar, dark.background());
+        assert_eq!(from_dark.app_bar, light.background());
+        // Document colours and metrics come from the matching built-in family.
+        assert_eq!(from_light.pasteboard, Tokens::for_brightness(Brightness::Dark).pasteboard);
+        assert_eq!(from_dark.pasteboard, Tokens::for_brightness(Brightness::Light).pasteboard);
+        assert_eq!(from_light.artboard_mark, Tokens::for_brightness(Brightness::Dark).artboard_mark);
+        assert_eq!(from_dark.radius, Tokens::for_brightness(Brightness::Light).radius);
+    }
+
+    #[test]
+    fn without_a_palette_the_built_in_tokens_are_unchanged() {
+        let ctx = egui::Context::default();
+        apply_with_palette(&ctx, Brightness::Light, Accent::Pink, Scheme::Classic, None);
+        let got = Tokens::get(&ctx);
+        let want = Tokens::for_scheme(Scheme::Classic, Brightness::Light, Accent::Pink);
+        assert_eq!((got.app_bar, got.panel, got.text, got.accent, got.selection), (want.app_bar, want.panel, want.text, want.accent, want.selection));
+        assert_eq!((got.dark, got.radius, got.error), (want.dark, want.radius, want.error));
+    }
+
+    #[test]
+    fn accent_fills_keep_white_lettering_readable() {
+        for dark in [true, false] {
+            let mut p = test_palette(dark);
+            // A palette accent can be bright: the strong fill must still carry white labels.
+            p.accent = Some(rgb(0xf0, 0xe0, 0x40));
+            let t = Tokens::for_palette(Brightness::MediumDark, Accent::Coral, Scheme::Modern, &p);
+            assert!(contrast(t.accent_strong, Color32::WHITE) >= 4.5, "dark={dark}: {:?}", t.accent_strong);
+            assert!(contrast(t.text, t.panel) >= 4.5, "dark={dark}: text on panel");
+        }
     }
 }
