@@ -14,6 +14,12 @@
       url = "github:storytold/craft-fonts/b076417b5880bd4154bd22f00695b1d28c6bea83";
       flake = false;
     };
+
+    # Splits the dependency build from the app build, so a source change does not recompile the
+    # whole dependency graph.
+    crane = {
+      url = "github:ipetkov/crane";
+    };
   };
 
   outputs =
@@ -21,6 +27,7 @@
       self,
       nixpkgs,
       craft-fonts,
+      crane,
     }:
     let
       inherit (nixpkgs) lib;
@@ -46,23 +53,41 @@
         inherit craft-fonts buildDate;
       };
 
+      # Written by `.github/workflows/binary.yml`; absent until the first binary release.
+      binaryInfo =
+        if builtins.pathExists ./binary-url.json then
+          builtins.fromJSON (builtins.readFile ./binary-url.json)
+        else
+          null;
+
       forAllSystems = f: lib.genAttrs systems (system: f (import nixpkgs { inherit system; }) system);
     in
     {
       packages = forAllSystems (
-        pkgs: _:
+        pkgs: system:
         let
-          vectorcraft = pkgs.callPackage ./nix/package.nix packageArgs;
+          source = pkgs.callPackage ./nix/package.nix (packageArgs // { craneLib = crane.mkLib pkgs; });
+          binary = pkgs.callPackage ./nix/binary.nix {
+            name = "vectorcraft";
+            info = binaryInfo;
+          };
+          binaryAvailable = binaryInfo != null && binaryInfo.system == system;
         in
         {
-          inherit vectorcraft;
-          default = vectorcraft;
+          vectorcraft-source = source;
+          vectorcraft = if binaryAvailable then binary else source;
+          default = if binaryAvailable then binary else source;
+        }
+        // lib.optionalAttrs binaryAvailable {
+          vectorcraft-binary = binary;
         }
       );
 
       # `nixpkgs.overlays = [ inputs.vectorcraft.overlays.default ]` → `pkgs.vectorcraft` everywhere.
       overlays.default = final: _prev: {
-        vectorcraft = final.callPackage ./nix/package.nix packageArgs;
+        vectorcraft = final.callPackage ./nix/package.nix (
+          packageArgs // { craneLib = crane.mkLib final; }
+        );
       };
 
       apps = forAllSystems (
@@ -77,7 +102,7 @@
       devShells = forAllSystems (
         pkgs: system:
         let
-          vectorcraft = self.packages.${system}.vectorcraft;
+          vectorcraft = self.packages.${system}.vectorcraft-source;
         in
         {
           default = pkgs.mkShell (
@@ -105,11 +130,11 @@
 
       checks = forAllSystems (
         pkgs: system: {
-          vectorcraft = self.packages.${system}.vectorcraft;
+          vectorcraft = self.packages.${system}.vectorcraft-source;
 
           # Both module entry points evaluate with `enable = true` (no full NixOS evaluation).
           modules = pkgs.callPackage ./nix/module-check.nix {
-            vectorcraft = self.packages.${system}.vectorcraft;
+            vectorcraft = self.packages.${system}.vectorcraft-source;
           };
 
           # `nix fmt` formats the flake; this keeps it formatted.
@@ -128,16 +153,28 @@
       # so `nixosModules.default`/`homeManagerModules.default` work without the overlay.
       nixosModules.default =
         { pkgs, ... }:
+        let
+          system = pkgs.stdenv.hostPlatform.system;
+        in
         {
           imports = [ (import ./nix/module.nix { kind = "nixos"; }) ];
-          _module.args.vectorcraftPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.vectorcraft;
+          _module.args = {
+            vectorcraftSourcePackage = self.packages.${system}.vectorcraft-source;
+            vectorcraftBinaryPackage = self.packages.${system}.vectorcraft-binary or null;
+          };
         };
 
       homeManagerModules.default =
         { pkgs, ... }:
+        let
+          system = pkgs.stdenv.hostPlatform.system;
+        in
         {
           imports = [ (import ./nix/module.nix { kind = "home-manager"; }) ];
-          _module.args.vectorcraftPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.vectorcraft;
+          _module.args = {
+            vectorcraftSourcePackage = self.packages.${system}.vectorcraft-source;
+            vectorcraftBinaryPackage = self.packages.${system}.vectorcraft-binary or null;
+          };
         };
     };
 }
