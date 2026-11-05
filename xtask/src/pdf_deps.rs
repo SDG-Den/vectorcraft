@@ -5,9 +5,9 @@ use std::process::Command;
 
 use serde_json::Value;
 
-const REV: &str = "92d392cff132eaf53e13afff77f38b5c11b73aa0";
-/// The writer's revision: craft-libs#417, CMYK, gray and spot colors with their exact inks.
-const KRILLA_REV: &str = "fb08be5fa19eee8d37e624397fcdc96df6035e92";
+const REV: &str = "41276fb90a13865d39c288c7ef85d22cfebc52c9";
+/// The writer is pinned to the same suite fork revision as the reader.
+const KRILLA_REV: &str = "41276fb90a13865d39c288c7ef85d22cfebc52c9";
 const PACKAGES: &[(&str, &str, &str)] = &[
     ("craft-pdf", "0.1.0", REV),
     ("krilla", "0.8.2", KRILLA_REV),
@@ -20,7 +20,7 @@ const PACKAGES: &[(&str, &str, &str)] = &[
 
 /// The resolved source of a craft-libs package at `rev`.
 fn source(rev: &str) -> String {
-    format!("git+https://github.com/storytold/craft-libs?rev={rev}#{rev}")
+    format!("git+https://github.com/SDG-Den/craft-libs?rev={rev}#{rev}")
 }
 
 pub fn run(root: &Path) -> Result<(), String> {
