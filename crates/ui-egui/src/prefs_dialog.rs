@@ -87,6 +87,8 @@ struct Applied {
     brightness: Brightness,
     accent: Accent,
     scheme: Scheme,
+    /// Bumped when the shared suite palette changes, so the theme is applied again.
+    palette_stamp: u64,
     /// User Interface › Canvas Color, unless it matches the interface brightness.
     canvas: Option<egui::Color32>,
     threads: i32,
@@ -109,6 +111,13 @@ fn canvas_color(key: &str) -> Option<egui::Color32> {
 
 /// Per frame: push UI-side preferences into egui / the renderer when they change.
 pub fn apply_runtime(app: &mut VectorcraftApp, ctx: &egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if ctx.input(|input| input.viewport().visible().unwrap_or(true))
+        && let Some(loaded) = app.palette_watcher.poll(ctx)
+    {
+        app.palette = Some(loaded.palette);
+        app.palette_stamp = app.palette_stamp.wrapping_add(1);
+    }
     let p = &app.session.prefs;
     if let Some(b) = Brightness::parse(&p.ui_brightness)
         && b != app.ui.brightness
@@ -119,6 +128,7 @@ pub fn apply_runtime(app: &mut VectorcraftApp, ctx: &egui::Context) {
         brightness: app.ui.brightness,
         accent: Accent::parse(&p.ui_accent).unwrap_or_default(),
         scheme: Scheme::parse(&p.ui_color_scheme).unwrap_or_default(),
+        palette_stamp: app.palette_stamp,
         canvas: canvas_color(&p.canvas_color),
         threads: p.render_threads,
         tool_tips: p.show_tool_tips,
@@ -128,7 +138,7 @@ pub fn apply_runtime(app: &mut VectorcraftApp, ctx: &egui::Context) {
     let id = applied_id();
     let prev: Option<Applied> = ctx.data(|d| d.get_temp::<Option<Applied>>(id)).flatten();
     if prev != Some(want) {
-        theme::apply_with(ctx, want.brightness, want.accent, want.scheme);
+        theme::apply_with_palette(ctx, want.brightness, want.accent, want.scheme, app.palette.as_ref());
         // General › Show Tool Tips: off, no button or field shows its tool tip (they never come
         // due), whichever widget asks for one.
         let delay = if want.tool_tips { egui::style::Interaction::default().tooltip_delay } else { f32::INFINITY };

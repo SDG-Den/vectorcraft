@@ -157,6 +157,13 @@ pub struct VectorcraftApp {
     pub synthetic: Vec<egui::Event>,
     styled: bool,
     fonts_ready: bool,
+    /// The shared suite palette last loaded, when one exists. `None` keeps the built-in theme.
+    pub(crate) palette: Option<craft_ui::theme::Palette>,
+    /// Reloads [`Self::palette`] when the suite's palette file changes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) palette_watcher: craft_ui::theme::PaletteWatcher,
+    /// Bumped whenever [`Self::palette`] changes, so the theme is applied again.
+    pub(crate) palette_stamp: u64,
     /// The egui context the UI's textures were uploaded to (0: none yet; see
     /// [`Self::adopt_context`]).
     context: u64,
