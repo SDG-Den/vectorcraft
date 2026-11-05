@@ -1,0 +1,8 @@
+{
+  "url": "https://github.com/SDG-Den/vectorcraft/releases/download/binary-testing/vectorcraft-0.20.0-linux-x86_64.tar.gz",
+  "hash": "sha256-sWBkGUshpjfXAaXyH+kywLct/jRuGcR4qGfAbCH4Epw=",
+  "version": "0.20.0",
+  "tag": "binary-testing",
+  "system": "x86_64-linux",
+  "repo": "SDG-Den/vectorcraft"
+}
